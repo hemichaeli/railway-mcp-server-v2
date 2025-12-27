@@ -41,7 +41,7 @@ const queries = {
 function createMcpServer(): McpServer {
   const server = new McpServer({
     name: "railway-mcp-server",
-    version: "2.0.0",
+    version: "2.0.1",
   });
 
   // Register tools
@@ -191,7 +191,15 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json());
+// Apply express.json() only to routes that need it (NOT /messages)
+// The SSE transport's handlePostMessage needs the raw stream
+app.use((req, res, next) => {
+  if (req.path === "/messages") {
+    // Skip JSON parsing for /messages - SSEServerTransport handles it
+    return next();
+  }
+  express.json()(req, res, next);
+});
 
 // Modern Streamable HTTP transport - POST /mcp
 app.post("/mcp", async (req: Request, res: Response) => {
@@ -281,6 +289,7 @@ app.get("/sse", async (req: Request, res: Response) => {
 });
 
 // Legacy SSE transport - POST /messages
+// IMPORTANT: No body parsing middleware - SSEServerTransport handles the raw stream
 app.post("/messages", async (req: Request, res: Response) => {
   const sessionId = req.query.sessionId as string;
   console.log(`Message received for session: ${sessionId}`);
@@ -295,7 +304,8 @@ app.post("/messages", async (req: Request, res: Response) => {
   }
 
   try {
-    await transport.handlePostMessage(req, res, req.body);
+    // Pass the raw request - SDK handles parsing internally
+    await transport.handlePostMessage(req, res);
   } catch (error) {
     console.error("Message handling error:", error);
     if (!res.headersSent) {
@@ -309,7 +319,7 @@ app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     sessions: Object.keys(transports).length,
-    version: "2.0.0"
+    version: "2.0.1"
   });
 });
 
@@ -317,7 +327,7 @@ app.get("/health", (req, res) => {
 app.get("/", (req, res) => {
   res.json({
     name: "Railway MCP Server",
-    version: "2.0.0",
+    version: "2.0.1",
     endpoints: {
       streamableHttp: "/mcp",
       sse: "/sse",
