@@ -1,7 +1,7 @@
 {
   "name": "railway-mcp-server",
   "version": "2.0.0",
-  "description": "Railway MCP Server v2 - Using official MCP SDK for Claude.ai integration",
+  "description": "Railway MCP Server v2 - Using official MCP SDK with StreamableHTTP and SSE support",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
