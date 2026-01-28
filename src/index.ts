@@ -28,7 +28,7 @@ const queries = {
   listEnvironments: gql`query($projectId: String!) { project(id: $projectId) { environments { edges { node { id name } } } } }`,
   createProject: gql`mutation($name: String!, $description: String) { projectCreate(input: { name: $name, description: $description }) { id name } }`,
   createService: gql`mutation($projectId: String!, $name: String!) { serviceCreate(input: { projectId: $projectId, name: $name }) { id name } }`,
-  deployFromGithub: gql`mutation($projectId: String!, $repo: String!, $branch: String) { serviceCreate(input: { projectId: $projectId, source: { repo: $repo, branch: $branch } }) { id name } }`,
+  deployFromGithub: gql`mutation($projectId: String!, $repo: String!) { serviceCreate(input: { projectId: $projectId, source: { repo: $repo } }) { id name } }`,
   createDomain: gql`mutation($serviceId: String!, $environmentId: String!) { serviceDomainCreate(input: { serviceId: $serviceId, environmentId: $environmentId }) { domain } }`,
   setVariable: gql`mutation($projectId: String!, $environmentId: String!, $serviceId: String!, $name: String!, $value: String!) { variableUpsert(input: { projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId, name: $name, value: $value }) }`,
   restartService: gql`mutation($serviceId: String!, $environmentId: String!) { serviceInstanceRedeploy(serviceId: $serviceId, environmentId: $environmentId) }`,
@@ -41,7 +41,7 @@ const queries = {
 function createMcpServer(): McpServer {
   const server = new McpServer({
     name: "railway-mcp-server",
-    version: "2.0.1",
+    version: "2.0.2",
   });
 
   // Register tools
@@ -108,10 +108,9 @@ function createMcpServer(): McpServer {
 
   server.tool("deploy_from_github", "Deploy a service from a GitHub repo", {
     projectId: z.string(),
-    repo: z.string().describe("GitHub repo (user/repo)"),
-    branch: z.string().optional()
-  }, async (args) => {
-    const data: any = await client.request(queries.deployFromGithub, args);
+    repo: z.string().describe("GitHub repo (user/repo)")
+  }, async ({ projectId, repo }) => {
+    const data: any = await client.request(queries.deployFromGithub, { projectId, repo });
     return { content: [{ type: "text", text: JSON.stringify(data.serviceCreate, null, 2) }] };
   });
 
@@ -319,7 +318,7 @@ app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     sessions: Object.keys(transports).length,
-    version: "2.0.1"
+    version: "2.0.2"
   });
 });
 
@@ -327,7 +326,7 @@ app.get("/health", (req, res) => {
 app.get("/", (req, res) => {
   res.json({
     name: "Railway MCP Server",
-    version: "2.0.1",
+    version: "2.0.2",
     endpoints: {
       streamableHttp: "/mcp",
       sse: "/sse",
