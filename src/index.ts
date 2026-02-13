@@ -17,14 +17,16 @@ const client = new GraphQLClient("https://backboard.railway.app/graphql/v2", {
 // Store transports by session ID
 const transports: Record<string, StreamableHTTPServerTransport | SSEServerTransport> = {};
 
-// GraphQL queries
+// GraphQL queries - Updated for Railway API changes
+// Note: variables query returns a scalar (JSON object), not an object with fields
 const queries = {
   listProjects: gql`query { projects { edges { node { id name description createdAt updatedAt } } } }`,
   getProject: gql`query($id: String!) { project(id: $id) { id name description createdAt services { edges { node { id name } } } environments { edges { node { id name } } } } }`,
   listServices: gql`query($projectId: String!) { project(id: $projectId) { services { edges { node { id name icon createdAt } } } } }`,
   listDeployments: gql`query($projectId: String!, $serviceId: String!) { deployments(projectId: $projectId, serviceId: $serviceId, first: 10) { edges { node { id status createdAt } } } }`,
   getDeploymentLogs: gql`query($deploymentId: String!, $limit: Int) { deploymentLogs(deploymentId: $deploymentId, limit: $limit) { message timestamp severity } }`,
-  listVariables: gql`query($projectId: String!, $environmentId: String!, $serviceId: String!) { variables(projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId) { name value } }`,
+  // Fixed: variables returns a scalar (JSON object directly), not an object with name/value fields
+  listVariables: gql`query($projectId: String!, $environmentId: String!, $serviceId: String!) { variables(projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId) }`,
   listEnvironments: gql`query($projectId: String!) { project(id: $projectId) { environments { edges { node { id name } } } } }`,
   createProject: gql`mutation($name: String!, $description: String) { projectCreate(input: { name: $name, description: $description }) { id name } }`,
   createService: gql`mutation($projectId: String!, $name: String!) { serviceCreate(input: { projectId: $projectId, name: $name }) { id name } }`,
@@ -41,7 +43,7 @@ const queries = {
 function createMcpServer(): McpServer {
   const server = new McpServer({
     name: "railway-mcp-server",
-    version: "2.0.2",
+    version: "2.0.3",
   });
 
   // Register tools
@@ -82,7 +84,10 @@ function createMcpServer(): McpServer {
     serviceId: z.string()
   }, async (args) => {
     const data: any = await client.request(queries.listVariables, args);
-    return { content: [{ type: "text", text: JSON.stringify(data.variables, null, 2) }] };
+    // variables is returned as a JSON object (scalar), convert to array format for display
+    const varsObj = data.variables || {};
+    const varsArray = Object.entries(varsObj).map(([name, value]) => ({ name, value }));
+    return { content: [{ type: "text", text: JSON.stringify(varsArray, null, 2) }] };
   });
 
   server.tool("list_environments", "List environments in a project", { projectId: z.string() }, async ({ projectId }) => {
@@ -318,7 +323,7 @@ app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     sessions: Object.keys(transports).length,
-    version: "2.0.2"
+    version: "2.0.3"
   });
 });
 
@@ -326,7 +331,7 @@ app.get("/health", (req, res) => {
 app.get("/", (req, res) => {
   res.json({
     name: "Railway MCP Server",
-    version: "2.0.2",
+    version: "2.0.3",
     endpoints: {
       streamableHttp: "/mcp",
       sse: "/sse",
