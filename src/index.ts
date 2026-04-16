@@ -17,21 +17,24 @@ const client = new GraphQLClient("https://backboard.railway.app/graphql/v2", {
 // Store transports by session ID
 const transports: Record<string, StreamableHTTPServerTransport | SSEServerTransport> = {};
 
-// GraphQL queries - Updated for Railway API v2 changes
+// GraphQL queries - Railway API v2
 const queries = {
   listProjects: gql`query { projects { edges { node { id name description createdAt updatedAt } } } }`,
   getProject: gql`query($id: String!) { project(id: $id) { id name description createdAt services { edges { node { id name } } } environments { edges { node { id name } } } } }`,
   listServices: gql`query($projectId: String!) { project(id: $projectId) { services { edges { node { id name icon createdAt } } } } }`,
-  // Fixed: deployments now requires input object
+  getService: gql`query($id: String!) { service(id: $id) { id name icon createdAt source { image repo branch } } }`,
   listDeployments: gql`query($projectId: String!, $serviceId: String!) { deployments(input: { projectId: $projectId, serviceId: $serviceId }, first: 10) { edges { node { id status createdAt } } } }`,
   getDeploymentLogs: gql`query($deploymentId: String!, $limit: Int) { deploymentLogs(deploymentId: $deploymentId, limit: $limit) { message timestamp severity } }`,
-  // Fixed: variables returns a scalar (JSON object directly)
+  cancelDeployment: gql`mutation($id: String!) { deploymentCancel(id: $id) }`,
   listVariables: gql`query($projectId: String!, $environmentId: String!, $serviceId: String!) { variables(projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId) }`,
   listEnvironments: gql`query($projectId: String!) { project(id: $projectId) { environments { edges { node { id name } } } } }`,
+  listDomains: gql`query($serviceId: String!, $environmentId: String!, $projectId: String!) { domains(serviceId: $serviceId, environmentId: $environmentId, projectId: $projectId) { serviceDomains { id domain } customDomains { id domain } } }`,
   createProject: gql`mutation($name: String!, $description: String) { projectCreate(input: { name: $name, description: $description }) { id name } }`,
   createService: gql`mutation($projectId: String!, $name: String!) { serviceCreate(input: { projectId: $projectId, name: $name }) { id name } }`,
   deployFromGithub: gql`mutation($projectId: String!, $repo: String!) { serviceCreate(input: { projectId: $projectId, source: { repo: $repo } }) { id name } }`,
   createDomain: gql`mutation($serviceId: String!, $environmentId: String!) { serviceDomainCreate(input: { serviceId: $serviceId, environmentId: $environmentId }) { domain } }`,
+  createCustomDomain: gql`mutation($serviceId: String!, $environmentId: String!, $domain: String!) { customDomainCreate(input: { serviceId: $serviceId, environmentId: $environmentId, domain: $domain }) { id domain } }`,
+  deleteServiceDomain: gql`mutation($id: String!) { serviceDomainDelete(id: $id) }`,
   setVariable: gql`mutation($projectId: String!, $environmentId: String!, $serviceId: String!, $name: String!, $value: String!) { variableUpsert(input: { projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId, name: $name, value: $value }) }`,
   restartService: gql`mutation($serviceId: String!, $environmentId: String!) { serviceInstanceRedeploy(serviceId: $serviceId, environmentId: $environmentId) }`,
   deleteProject: gql`mutation($id: String!) { projectDelete(id: $id) }`,
@@ -43,10 +46,9 @@ const queries = {
 function createMcpServer(): McpServer {
   const server = new McpServer({
     name: "railway-mcp-server",
-    version: "2.0.4",
+    version: "2.1.0",
   });
 
-  // Register tools
   server.tool("list_projects", "List all Railway projects", {}, async () => {
     const data: any = await client.request(queries.listProjects);
     return { content: [{ type: "text", text: JSON.stringify(data.projects.edges.map((e: any) => e.node), null, 2) }] };
@@ -60,6 +62,13 @@ function createMcpServer(): McpServer {
   server.tool("list_services", "List services in a project", { projectId: z.string().describe("Project ID") }, async ({ projectId }) => {
     const data: any = await client.request(queries.listServices, { projectId });
     return { content: [{ type: "text", text: JSON.stringify(data.project.services.edges.map((e: any) => e.node), null, 2) }] };
+  });
+
+  server.tool("get_service", "Get service details including source repo, branch, and image", {
+    serviceId: z.string().describe("Service ID")
+  }, async ({ serviceId }) => {
+    const data: any = await client.request(queries.getService, { id: serviceId });
+    return { content: [{ type: "text", text: JSON.stringify(data.service, null, 2) }] };
   });
 
   server.tool("list_deployments", "List deployments for a service", {
@@ -78,13 +87,19 @@ function createMcpServer(): McpServer {
     return { content: [{ type: "text", text: JSON.stringify(data.deploymentLogs, null, 2) }] };
   });
 
+  server.tool("cancel_deployment", "Cancel an active deployment", {
+    deploymentId: z.string().describe("Deployment ID to cancel")
+  }, async ({ deploymentId }) => {
+    await client.request(queries.cancelDeployment, { id: deploymentId });
+    return { content: [{ type: "text", text: JSON.stringify({ success: true, message: "Deployment cancelled" }, null, 2) }] };
+  });
+
   server.tool("list_variables", "List environment variables", {
     projectId: z.string(),
     environmentId: z.string(),
     serviceId: z.string()
   }, async (args) => {
     const data: any = await client.request(queries.listVariables, args);
-    // variables is returned as a JSON object (scalar), convert to array format for display
     const varsObj = data.variables || {};
     const varsArray = Object.entries(varsObj).map(([name, value]) => ({ name, value }));
     return { content: [{ type: "text", text: JSON.stringify(varsArray, null, 2) }] };
@@ -93,6 +108,15 @@ function createMcpServer(): McpServer {
   server.tool("list_environments", "List environments in a project", { projectId: z.string() }, async ({ projectId }) => {
     const data: any = await client.request(queries.listEnvironments, { projectId });
     return { content: [{ type: "text", text: JSON.stringify(data.project.environments.edges.map((e: any) => e.node), null, 2) }] };
+  });
+
+  server.tool("list_domains", "List all domains (Railway-generated and custom) for a service in an environment", {
+    serviceId: z.string().describe("Service ID"),
+    environmentId: z.string().describe("Environment ID"),
+    projectId: z.string().describe("Project ID")
+  }, async ({ serviceId, environmentId, projectId }) => {
+    const data: any = await client.request(queries.listDomains, { serviceId, environmentId, projectId });
+    return { content: [{ type: "text", text: JSON.stringify(data.domains, null, 2) }] };
   });
 
   server.tool("create_project", "Create a new Railway project", {
@@ -119,12 +143,28 @@ function createMcpServer(): McpServer {
     return { content: [{ type: "text", text: JSON.stringify(data.serviceCreate, null, 2) }] };
   });
 
-  server.tool("create_domain", "Generate a domain for a service", {
+  server.tool("create_domain", "Generate a Railway domain for a service", {
     serviceId: z.string(),
     environmentId: z.string()
   }, async (args) => {
     const data: any = await client.request(queries.createDomain, args);
     return { content: [{ type: "text", text: JSON.stringify(data.serviceDomainCreate, null, 2) }] };
+  });
+
+  server.tool("create_custom_domain", "Attach a custom domain to a service in an environment", {
+    serviceId: z.string().describe("Service ID"),
+    environmentId: z.string().describe("Environment ID"),
+    domain: z.string().describe("Custom domain (e.g. api.example.com)")
+  }, async (args) => {
+    const data: any = await client.request(queries.createCustomDomain, args);
+    return { content: [{ type: "text", text: JSON.stringify(data.customDomainCreate, null, 2) }] };
+  });
+
+  server.tool("delete_service_domain", "Delete a Railway-generated service domain by its ID", {
+    domainId: z.string().describe("Service domain ID (get from list_domains)")
+  }, async ({ domainId }) => {
+    await client.request(queries.deleteServiceDomain, { id: domainId });
+    return { content: [{ type: "text", text: JSON.stringify({ success: true, message: "Domain deleted" }, null, 2) }] };
   });
 
   server.tool("set_variable", "Set an environment variable", {
@@ -196,10 +236,8 @@ app.use((req, res, next) => {
 });
 
 // Apply express.json() only to routes that need it (NOT /messages)
-// The SSE transport's handlePostMessage needs the raw stream
 app.use((req, res, next) => {
   if (req.path === "/messages") {
-    // Skip JSON parsing for /messages - SSEServerTransport handles it
     return next();
   }
   express.json()(req, res, next);
@@ -293,7 +331,6 @@ app.get("/sse", async (req: Request, res: Response) => {
 });
 
 // Legacy SSE transport - POST /messages
-// IMPORTANT: No body parsing middleware - SSEServerTransport handles the raw stream
 app.post("/messages", async (req: Request, res: Response) => {
   const sessionId = req.query.sessionId as string;
   console.log(`Message received for session: ${sessionId}`);
@@ -308,7 +345,6 @@ app.post("/messages", async (req: Request, res: Response) => {
   }
 
   try {
-    // Pass the raw request - SDK handles parsing internally
     await transport.handlePostMessage(req, res);
   } catch (error) {
     console.error("Message handling error:", error);
@@ -323,7 +359,7 @@ app.get("/health", (req, res) => {
   res.json({
     status: "ok",
     sessions: Object.keys(transports).length,
-    version: "2.0.4"
+    version: "2.1.0"
   });
 });
 
@@ -331,7 +367,7 @@ app.get("/health", (req, res) => {
 app.get("/", (req, res) => {
   res.json({
     name: "Railway MCP Server",
-    version: "2.0.4",
+    version: "2.1.0",
     endpoints: {
       streamableHttp: "/mcp",
       sse: "/sse",
@@ -339,9 +375,11 @@ app.get("/", (req, res) => {
       health: "/health"
     },
     tools: [
-      "list_projects", "get_project", "list_services", "list_deployments",
-      "get_deployment_logs", "list_variables", "list_environments",
-      "create_project", "create_service", "deploy_from_github", "create_domain",
+      "list_projects", "get_project", "list_services", "get_service",
+      "list_deployments", "get_deployment_logs", "cancel_deployment",
+      "list_variables", "list_environments", "list_domains",
+      "create_project", "create_service", "deploy_from_github",
+      "create_domain", "create_custom_domain", "delete_service_domain",
       "set_variable", "set_variables_bulk", "restart_service",
       "delete_project", "delete_service", "delete_variable"
     ]
@@ -349,5 +387,5 @@ app.get("/", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Railway MCP Server running on port ${PORT}`);
+  console.log(`Railway MCP Server v2.1.0 running on port ${PORT}`);
 });
