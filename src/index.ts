@@ -41,6 +41,9 @@ const queries = {
   listDeployments: gql`query($projectId: String!, $serviceId: String!) { deployments(input: { projectId: $projectId, serviceId: $serviceId }, first: 10) { edges { node { id status createdAt url staticUrl } } } }`,
   getDeployment: gql`query($id: String!) { deployment(id: $id) { id status url staticUrl environmentId serviceId projectId createdAt updatedAt canRedeploy canRollback meta } }`,
   cancelDeployment: gql`mutation($id: String!) { deploymentCancel(id: $id) }`,
+  // deploymentCreate: triggers a NEW deploy from the configured GitHub branch/commit
+  // unlike serviceInstanceRedeploy which re-runs the existing image
+  triggerLatestDeploy: gql`mutation($serviceId: String!, $environmentId: String!) { deploymentCreate(input: { serviceId: $serviceId, environmentId: $environmentId }) { id status } }`,
 
   // Logs
   getDeploymentLogs: gql`query($deploymentId: String!, $limit: Int) { deploymentLogs(deploymentId: $deploymentId, limit: $limit) { message timestamp severity } }`,
@@ -70,7 +73,7 @@ const queries = {
 };
 
 function createMcpServer(): McpServer {
-  const server = new McpServer({ name: "railway-mcp-server", version: "2.2.0" });
+  const server = new McpServer({ name: "railway-mcp-server", version: "2.2.1" });
 
   // ── Projects ──────────────────────────────────────────────────────────────
 
@@ -132,7 +135,7 @@ function createMcpServer(): McpServer {
     return { content: [{ type: "text", text: JSON.stringify(data.serviceCreate, null, 2) }] };
   });
 
-  server.tool("deploy_from_github", "Deploy a service from a GitHub repo", {
+  server.tool("deploy_from_github", "Deploy a service from a GitHub repo (creates a NEW service - use trigger_latest_deploy to redeploy an existing one)", {
     projectId: z.string(),
     repo: z.string().describe("GitHub repo in owner/repo format")
   }, async ({ projectId, repo }) => {
@@ -140,12 +143,20 @@ function createMcpServer(): McpServer {
     return { content: [{ type: "text", text: JSON.stringify(data.serviceCreate, null, 2) }] };
   });
 
-  server.tool("restart_service", "Restart a service (triggers a redeploy)", {
+  server.tool("trigger_latest_deploy", "Deploy the latest commit from the configured GitHub branch for an existing service. Unlike restart_service (which re-runs the current image), this pulls the newest commit from the connected branch and creates a fresh deployment.", {
+    serviceId: z.string().describe("Service ID of the existing service to redeploy"),
+    environmentId: z.string().describe("Environment ID")
+  }, async ({ serviceId, environmentId }) => {
+    const data: any = await client.request(queries.triggerLatestDeploy, { serviceId, environmentId });
+    return { content: [{ type: "text", text: JSON.stringify(data.deploymentCreate, null, 2) }] };
+  });
+
+  server.tool("restart_service", "Restart a service by re-running the current deployed image (does NOT pull new commits - use trigger_latest_deploy for that)", {
     serviceId: z.string(),
     environmentId: z.string()
   }, async (args) => {
     await client.request(queries.restartService, args);
-    return { content: [{ type: "text", text: JSON.stringify({ success: true, message: "Service restarting" }, null, 2) }] };
+    return { content: [{ type: "text", text: JSON.stringify({ success: true, message: "Service restarting (existing image)" }, null, 2) }] };
   });
 
   server.tool("delete_service", "Delete a service", {
@@ -438,17 +449,18 @@ app.post("/messages", async (req: Request, res: Response) => {
   }
 });
 
-app.get("/health", (req, res) => res.json({ status: "ok", sessions: Object.keys(transports).length, version: "2.2.0" }));
+app.get("/health", (req, res) => res.json({ status: "ok", sessions: Object.keys(transports).length, version: "2.2.1" }));
 
 app.get("/", (req, res) => res.json({
   name: "Railway MCP Server",
-  version: "2.2.0",
-  toolCount: 34,
+  version: "2.2.1",
+  toolCount: 35,
   tools: [
     // Projects
     "list_projects", "get_project", "get_project_members", "create_project", "delete_project",
     // Services
-    "list_services", "get_service", "create_service", "deploy_from_github", "restart_service", "delete_service",
+    "list_services", "get_service", "create_service", "deploy_from_github",
+    "trigger_latest_deploy", "restart_service", "delete_service",
     // Environments
     "list_environments", "create_environment", "delete_environment",
     // Deployments
@@ -464,4 +476,4 @@ app.get("/", (req, res) => res.json({
   ]
 }));
 
-app.listen(PORT, () => console.log(`Railway MCP Server v2.2.0 running on port ${PORT} - 34 tools`));
+app.listen(PORT, () => console.log(`Railway MCP Server v2.2.1 running on port ${PORT} - 35 tools`));
