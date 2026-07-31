@@ -5,10 +5,17 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { GraphQLClient, gql } from "graphql-request";
 import { randomUUID } from "crypto";
 import { z } from "zod";
+import { registerOAuth, requireBearer, authEnabled } from "./mcp-auth.js";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const RAILWAY_API_TOKEN = process.env.RAILWAY_API_TOKEN || "";
+
+const BASE_URL =
+  process.env.SERVER_URL ||
+  (process.env.RAILWAY_PUBLIC_DOMAIN
+    ? "https://" + process.env.RAILWAY_PUBLIC_DOMAIN
+    : "http://localhost:" + PORT);
 
 const client = new GraphQLClient("https://backboard.railway.app/graphql/v2", {
   headers: { Authorization: `Bearer ${RAILWAY_API_TOKEN}` },
@@ -30,7 +37,7 @@ const queries = {
   createService: gql`mutation($projectId: String!, $name: String!) { serviceCreate(input: { projectId: $projectId, name: $name }) { id name } }`,
   updateService: gql`mutation($id: String!, $name: String!) { serviceUpdate(id: $id, input: { name: $name }) { id name } }`,
   deployFromGithub: gql`mutation($projectId: String!, $repo: String!) { serviceCreate(input: { projectId: $projectId, source: { repo: $repo } }) { id name } }`,
-  triggerLatestDeploy: gql`mutation($serviceId: String!, $environmentId: String!) { deploymentCreate(input: { serviceId: $serviceId, environmentId: $environmentId }) { id status } }`,
+  triggerLatestDeploy: gql`mutation($serviceId: String!, $environmentId: String!) { serviceInstanceDeployV2(serviceId: $serviceId, environmentId: $environmentId) }`,
   restartService: gql`mutation($serviceId: String!, $environmentId: String!) { serviceInstanceRedeploy(serviceId: $serviceId, environmentId: $environmentId) }`,
   deleteService: gql`mutation($id: String!) { serviceDelete(id: $id) }`,
 
@@ -86,7 +93,7 @@ const queries = {
 };
 
 function createMcpServer(): McpServer {
-  const server = new McpServer({ name: "railway-mcp-server", version: "2.3.0" });
+  const server = new McpServer({ name: "railway-mcp-server", version: "2.4.0" });
 
   // ── Projects ──────────────────────────────────────────────────────────────
 
@@ -169,7 +176,7 @@ function createMcpServer(): McpServer {
     environmentId: z.string().describe("Environment ID")
   }, async ({ serviceId, environmentId }) => {
     const data: any = await client.request(queries.triggerLatestDeploy, { serviceId, environmentId });
-    return { content: [{ type: "text", text: JSON.stringify(data.deploymentCreate, null, 2) }] };
+    return { content: [{ type: "text", text: JSON.stringify({ id: data.serviceInstanceDeployV2, success: true, message: "Deployment triggered - use get_deployment for status" }, null, 2) }] };
   });
 
   server.tool("restart_service", "Re-run the current deployed image without pulling new commits. Use trigger_latest_deploy to get new code.", {
@@ -498,7 +505,7 @@ app.use((req, res, next) => {
   express.json()(req, res, next);
 });
 
-app.post("/mcp", async (req: Request, res: Response) => {
+app.post("/mcp", requireBearer(BASE_URL), async (req: Request, res: Response) => {
   const sessionId = req.headers["mcp-session-id"] as string;
   const isInitRequest = req.body?.method === "initialize";
   try {
@@ -520,7 +527,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
   }
 });
 
-app.delete("/mcp", async (req: Request, res: Response) => {
+app.delete("/mcp", requireBearer(BASE_URL), async (req: Request, res: Response) => {
   const sessionId = req.headers["mcp-session-id"] as string;
   if (sessionId && transports[sessionId]) {
     await transports[sessionId].close?.();
@@ -531,7 +538,7 @@ app.delete("/mcp", async (req: Request, res: Response) => {
   }
 });
 
-app.get("/sse", async (req: Request, res: Response) => {
+app.get("/sse", requireBearer(BASE_URL), async (req: Request, res: Response) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -549,7 +556,7 @@ app.get("/sse", async (req: Request, res: Response) => {
   }
 });
 
-app.post("/messages", async (req: Request, res: Response) => {
+app.post("/messages", requireBearer(BASE_URL), async (req: Request, res: Response) => {
   const sessionId = req.query.sessionId as string;
   if (!sessionId) return res.status(400).json({ error: "Missing sessionId" });
   const transport = transports[sessionId];
@@ -561,11 +568,13 @@ app.post("/messages", async (req: Request, res: Response) => {
   }
 });
 
-app.get("/health", (req, res) => res.json({ status: "ok", sessions: Object.keys(transports).length, version: "2.3.0" }));
+app.get("/health", (req, res) => res.json({ status: "ok", sessions: Object.keys(transports).length, version: "2.4.0", auth: authEnabled }));
+
+registerOAuth(app, { baseUrl: BASE_URL, clientPrefix: "railway-mcp" });
 
 app.get("/", (req, res) => res.json({
   name: "Railway MCP Server",
-  version: "2.3.0",
+  version: "2.4.0",
   toolCount: 47,
   tools: [
     "list_projects", "get_project", "get_project_members", "create_project", "delete_project",
@@ -583,4 +592,4 @@ app.get("/", (req, res) => res.json({
   ]
 }));
 
-app.listen(PORT, () => console.log(`Railway MCP Server v2.3.0 running on port ${PORT} - 47 tools`));
+app.listen(PORT, () => console.log(`Railway MCP Server v2.4.0 running on port ${PORT} - 47 tools`));
