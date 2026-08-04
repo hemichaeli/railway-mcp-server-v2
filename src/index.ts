@@ -6,6 +6,9 @@ import { GraphQLClient, gql } from "graphql-request";
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { registerOAuth, requireBearer, authEnabled } from "./mcp-auth.js";
+import { installProcessGuards, guardSseSocket } from "./process-guards.js";
+
+installProcessGuards("railway-mcp");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -93,7 +96,7 @@ const queries = {
 };
 
 function createMcpServer(): McpServer {
-  const server = new McpServer({ name: "railway-mcp-server", version: "2.4.0" });
+  const server = new McpServer({ name: "railway-mcp-server", version: "2.4.1" });
 
   // ── Projects ──────────────────────────────────────────────────────────────
 
@@ -539,6 +542,7 @@ app.delete("/mcp", requireBearer(BASE_URL), async (req: Request, res: Response) 
 });
 
 app.get("/sse", requireBearer(BASE_URL), async (req: Request, res: Response) => {
+  guardSseSocket(req, res);
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -568,13 +572,13 @@ app.post("/messages", requireBearer(BASE_URL), async (req: Request, res: Respons
   }
 });
 
-app.get("/health", (req, res) => res.json({ status: "ok", sessions: Object.keys(transports).length, version: "2.4.0", auth: authEnabled }));
+app.get("/health", (req, res) => res.json({ status: "ok", sessions: Object.keys(transports).length, version: "2.4.1", auth: authEnabled }));
 
 registerOAuth(app, { baseUrl: BASE_URL, clientPrefix: "railway-mcp" });
 
 app.get("/", (req, res) => res.json({
   name: "Railway MCP Server",
-  version: "2.4.0",
+  version: "2.4.1",
   toolCount: 47,
   tools: [
     "list_projects", "get_project", "get_project_members", "create_project", "delete_project",
@@ -592,4 +596,4 @@ app.get("/", (req, res) => res.json({
   ]
 }));
 
-app.listen(PORT, () => console.log(`Railway MCP Server v2.4.0 running on port ${PORT} - 47 tools`));
+app.listen(PORT, () => console.log(`Railway MCP Server v2.4.1 running on port ${PORT} - 47 tools`));
